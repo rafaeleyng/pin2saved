@@ -7,6 +7,8 @@ import {
   ComAtprotoRepoListRecords,
 } from "@atproto/api";
 
+import { DidResolver } from "@atproto/identity/dist/did";
+
 const postNsid = "app.bsky.feed.post";
 
 const getDid = async (agent: AtpAgent, didOrHandle: string) => {
@@ -19,6 +21,12 @@ const getDid = async (agent: AtpAgent, didOrHandle: string) => {
     handle: didOrHandle,
   });
   return did;
+};
+
+const getDidDoc = async (did: string) => {
+  const didres = new DidResolver({});
+  const doc = await didres.resolve(did);
+  return doc;
 };
 
 const paginateAllRecords = async <TRecord,>(
@@ -55,8 +63,16 @@ const isPushpinReplyRecord = (
 const isPushpinReply = (p: PushpinReplyRecord): boolean =>
   !!p.value.reply && p.value.text.trim() === "📌";
 
-const findPushpinReplies = async (agent: AtpAgent, actorDid: string) => {
+const findPushpinReplies = async (
+  agent: AtpAgent,
+  actorDid: string,
+  progressUpdate: (msg: string) => void
+) => {
+  let page = 0;
   const postPaginator = async (cursor: string | undefined) => {
+    page++;
+    progressUpdate(`Reading batch ${page}`);
+
     const res = await agent.com.atproto.repo.listRecords({
       collection: postNsid,
       repo: actorDid,
@@ -72,14 +88,19 @@ const findPushpinReplies = async (agent: AtpAgent, actorDid: string) => {
   };
 
   const posts = await paginateAllRecords(postPaginator);
-  return posts;
+  return posts.sort((a: PushpinReplyRecord, b: PushpinReplyRecord): number =>
+    a.value.createdAt.localeCompare(b.value.createdAt)
+  );
 };
 
 const createBookmarks = async (
   agent: AtpAgent,
-  pushpinReplies: PushpinReplyRecord[]
+  pushpinReplies: PushpinReplyRecord[],
+  progressUpdate: (msg: string) => void
 ) => {
-  for (const post of pushpinReplies) {
+  for (let i = 0; i < pushpinReplies.length; i++) {
+    progressUpdate(`Creating bookmark ${i + 1}`);
+    const post = pushpinReplies[i];
     await agent.app.bsky.bookmark.createBookmark({
       cid: post.value.reply.parent.cid,
       uri: post.value.reply.parent.uri,
@@ -89,11 +110,19 @@ const createBookmarks = async (
 
 const deletePushpinReplies = async (
   agent: AtpAgent,
-  pushpinReplies: PushpinReplyRecord[]
+  pushpinReplies: PushpinReplyRecord[],
+  progressUpdate: (msg: string) => void
 ) => {
-  for (const post of pushpinReplies) {
+  for (let i = 0; i < pushpinReplies.length; i++) {
+    progressUpdate(`Deleting bookmark ${i + 1}`);
+    const post = pushpinReplies[i];
     await agent.deletePost(post.uri);
   }
+};
+
+type StatusUpdate = {
+  status: "working" | "success" | "error";
+  message: string;
 };
 
 export default function Home() {
@@ -101,24 +130,74 @@ export default function Home() {
   const [password, setPassword] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [keepOrDelete, setKeepOrDelete] = useState<"keep" | "delete">("keep");
+  const [statusUpdate, setStatusUpdate] = useState<StatusUpdate | null>(null);
 
-  const migrate = async () => {
+  const pin2Saved = async () => {
     setIsLoading(true);
 
     try {
-      const agent = new AtpAgent({ service: "https://bsky.social/xrpc/" });
-      const actorDid = await getDid(agent, handle);
-      await agent.login({
-        identifier: actorDid,
+      const entrywayAgent = new AtpAgent({
+        service: "https://bsky.social",
+      });
+      const did = await getDid(entrywayAgent, handle);
+      const didDoc = await getDidDoc(did);
+
+      if (!didDoc || !didDoc.service) {
+        setStatusUpdate({
+          status: "error",
+          message: "Could not resolve DID",
+        });
+        return;
+      }
+
+      const pdsService = didDoc.service.find(
+        (s) => s.type === "AtprotoPersonalDataServer"
+      );
+      if (!pdsService) {
+        setStatusUpdate({
+          status: "error",
+          message: "Could not find PDS service",
+        });
+        return;
+      }
+
+      const pdsServiceEndpoint = pdsService.serviceEndpoint;
+      if (typeof pdsServiceEndpoint !== "string") {
+        setStatusUpdate({
+          status: "error",
+          message: "Could not obtain PDS service endpoint",
+        });
+        return;
+      }
+
+      const pdsAgent = new AtpAgent({
+        service: pdsServiceEndpoint,
+      });
+      await pdsAgent.login({
+        identifier: did,
         password: password,
       });
 
-      const pushpinReplies = await findPushpinReplies(agent, actorDid);
+      const progressUpdate = (msg: string) => {
+        setStatusUpdate({
+          status: "working",
+          message: msg,
+        });
+      };
 
-      await createBookmarks(agent, pushpinReplies);
+      const pushpinReplies = await findPushpinReplies(
+        pdsAgent,
+        did,
+        progressUpdate
+      );
+      await createBookmarks(pdsAgent, pushpinReplies, progressUpdate);
       if (keepOrDelete === "delete") {
-        await deletePushpinReplies(agent, pushpinReplies);
+        await deletePushpinReplies(pdsAgent, pushpinReplies, progressUpdate);
       }
+      setStatusUpdate({
+        status: "success",
+        message: "Done",
+      });
     } finally {
       setIsLoading(false);
     }
@@ -129,7 +208,7 @@ export default function Home() {
       <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
         <h1>pin2saved</h1>
         <p>
-          Convert your 📌 replies in <a href="https://bsky.app">Bluesky</a> to
+          Migrate your 📌 replies in <a href="https://bsky.app">Bluesky</a> to
           saved posts.
         </p>
 
@@ -156,10 +235,11 @@ export default function Home() {
 
         <div className="flex flex-col ">
           <small>
-            Note: start by keeping your 📌 replies, then check your saved posts
-            on Bluesky. If you like the result, change to delete the 📌 replies
-            and run it again (the saved posts won't be duplicated if you run
-            multiple times).
+            Note: you can choose between keeping or deleting your 📌 replies as
+            you migrate to saved posts. You can start with the "Keep" option,
+            check the result in Bluesky, and then decide to run again with the
+            "Delete" option if would like to cleanup (the saved posts won't be
+            duplicated if you run multiple times).
           </small>
           <label>
             <input
@@ -174,15 +254,20 @@ export default function Home() {
             <input
               type="radio"
               name="keepOrDelete"
-              value="delete"
+              value={"delete"}
               checked={keepOrDelete === "delete"}
               onChange={(e) => setKeepOrDelete("delete")}
             />
             Delete your 📌 replies when migrating to saved posts.
           </label>
-          <button disabled={isLoading} onClick={migrate}>
-            Migrate your 📌 replies to saved posts
+          <button disabled={isLoading} onClick={pin2Saved}>
+            Migrate!
           </button>
+          {statusUpdate && (
+            <pre>
+              <code>{JSON.stringify(statusUpdate, null, 2)}</code>
+            </pre>
+          )}
         </div>
       </main>
       <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">

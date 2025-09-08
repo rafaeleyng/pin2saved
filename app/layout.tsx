@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "pin2saved",
-  description: "Convert your Bluesky 📌 replies to saved posts.",
+  description: "Migrate your Bluesky 📌 replies to saved posts.",
 };
 
 export default function RootLayout({
