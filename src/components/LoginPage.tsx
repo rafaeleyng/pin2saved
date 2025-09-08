@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { client } from "../lib/oauth";
+import GithubLink from './GithubLink';
 
 export default function LoginPage() {
   const [handle, setHandle] = useState("");
@@ -87,6 +88,10 @@ export default function LoginPage() {
               {isLoading ? "Signing in..." : "Sign in"}
             </button>
           </form>
+        </div>
+
+        <div className="text-center">
+          <GithubLink />
         </div>
       </div>
     </div>
