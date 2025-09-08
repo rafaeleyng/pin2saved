@@ -91,7 +91,7 @@ export const deletePushpinReplies = async (
   progressUpdate: (msg: string) => void,
 ) => {
   for (let i = 0; i < pushpinReplies.length; i++) {
-    progressUpdate(`Deleting bookmark ${i + 1}`);
+    progressUpdate(`Deleting post ${i + 1}`);
     const post = pushpinReplies[i];
     await agent.deletePost(post.uri);
   }
