@@ -1,0 +1,12 @@
+{
+  "client_id": "https://bsky-prefs.vercel.app/oauth-client-metadata.json",
+  "redirect_uris": ["https://bsky-prefs.vercel.app/oauth/callback"],
+  "client_name": "Bluesky preferences helper",
+  "client_uri": "https://bsky-prefs.vercel.app",
+  "scope": "atproto transition:generic",
+  "grant_types": ["authorization_code", "refresh_token"],
+  "response_types": ["code"],
+  "token_endpoint_auth_method": "none",
+  "application_type": "web",
+  "dpop_bound_access_tokens": true
+}
